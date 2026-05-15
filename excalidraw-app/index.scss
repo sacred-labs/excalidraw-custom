@@ -78,6 +78,26 @@
       color: var(--color-danger-text);
     }
   }
+
+  .excalidraw-custom-app-title {
+    position: absolute;
+    top: 1rem;
+    left: 4rem;
+    z-index: var(--zIndex-layerUI);
+    display: flex;
+    align-items: center;
+    height: var(--lg-button-size);
+    max-width: calc(100vw - 8rem);
+    overflow: hidden;
+    color: var(--color-on-surface);
+    font-family: var(--ui-font);
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1;
+    pointer-events: none;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .excalidraw-app.is-collaborating {

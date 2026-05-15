@@ -76,7 +76,7 @@ export const AppMainMenu: React.FC<{
           Visual Debug
         </MainMenu.Item>
       )}
-      <MainMenu.Separator />
+      {isDevEnv() && <MainMenu.Separator />}
       <MainMenu.DefaultItems.Preferences />
       <MainMenu.DefaultItems.ToggleTheme
         allowSystemTheme
