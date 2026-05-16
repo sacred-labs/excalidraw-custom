@@ -55,6 +55,8 @@ export const getCloudErrorMessage = (
       ? "Bad request. Revisa que projectId sea un UUID válido y que el body tenga el formato esperado."
       : status === 403
         ? "Forbidden. La sesión existe, pero no tiene permiso para este recurso."
+        : status === 409
+          ? "Conflict. Hay una versión más reciente en la nube; recarga el proyecto antes de guardar para no sobrescribir cambios."
         : status >= 500
           ? "Server error. Revisa la consola del backend api/."
           : "Unexpected response.";

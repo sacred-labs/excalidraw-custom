@@ -7,9 +7,13 @@ import {
   useEditorInterface,
   ExcalidrawAPIProvider,
   useExcalidrawAPI,
+  Button,
 } from "@excalidraw/excalidraw";
 import { trackEvent } from "@excalidraw/excalidraw/analytics";
-import { getDefaultAppState } from "@excalidraw/excalidraw/appState";
+import {
+  clearAppStateForDatabase,
+  getDefaultAppState,
+} from "@excalidraw/excalidraw/appState";
 import {
   CommandPalette,
   DEFAULT_CATEGORIES,
@@ -53,6 +57,7 @@ import {
   ExcalLogo,
   usersIcon,
   exportToPlus,
+  save as saveIcon,
   share,
   youtubeIcon,
 } from "@excalidraw/excalidraw/components/icons";
@@ -178,6 +183,27 @@ const isRemoteStorageEnabled =
   import.meta.env.VITE_APP_REMOTE_STORAGE === "true";
 const DataStorage = isRemoteStorageEnabled ? RemoteData : LocalData;
 const CLOUD_PROJECT_VIEW_STORAGE_KEY = "sacred-draw-cloud-project-view";
+type CloudSaveStatus = "synced" | "pending" | "saving";
+
+const getCloudSaveSignature = (
+  elements: readonly OrderedExcalidrawElement[],
+  appState: AppState,
+) => {
+  const syncableElements = elements.map((element) => {
+    if (!isInitializedImageElement(element)) {
+      return element;
+    }
+
+    const { status, ...elementWithoutFileStatus } = element;
+
+    return elementWithoutFileStatus;
+  });
+
+  return JSON.stringify({
+    elements: syncableElements,
+    appState: clearAppStateForDatabase(appState),
+  });
+};
 
 const CloudProjectsHome = () => {
   const [authStatus, setAuthStatus] = useState<
@@ -1619,6 +1645,17 @@ const ExcalidrawWrapper = () => {
   const [titleDraft, setTitleDraft] = useState("");
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
+  const [cloudSaveStatus, setCloudSaveStatus] =
+    useState<CloudSaveStatus>("synced");
+  const cloudSaveStatusRef = useRef<CloudSaveStatus>("synced");
+  const ignoreNextCloudSavePendingRef = useRef(false);
+  const latestCloudSaveSignatureRef = useRef<string | null>(null);
+  const lastSyncedCloudSaveSignatureRef = useRef<string | null>(null);
+
+  const updateCloudSaveStatus = useCallback((status: CloudSaveStatus) => {
+    cloudSaveStatusRef.current = status;
+    setCloudSaveStatus(status);
+  }, []);
 
   const loadProjectMetadata = useCallback(async () => {
     const projectId = getCloudProjectId();
@@ -1953,13 +1990,26 @@ const ExcalidrawWrapper = () => {
 
   useEffect(() => {
     const unloadHandler = (event: BeforeUnloadEvent) => {
-      DataStorage.flushSave();
+      const hasUnsyncedCloudChanges = Boolean(
+        isRemoteStorageEnabled &&
+          getCloudProjectId() &&
+          excalidrawAPI &&
+          getCloudSaveSignature(
+            excalidrawAPI.getSceneElementsIncludingDeleted(),
+            excalidrawAPI.getAppState(),
+          ) !== lastSyncedCloudSaveSignatureRef.current,
+      );
+
+      if (!isRemoteStorageEnabled || hasUnsyncedCloudChanges) {
+        DataStorage.flushSave();
+      }
 
       if (
         excalidrawAPI &&
-        DataStorage.fileStorage.shouldPreventUnload(
-          excalidrawAPI.getSceneElements(),
-        )
+        (hasUnsyncedCloudChanges ||
+          DataStorage.fileStorage.shouldPreventUnload(
+            excalidrawAPI.getSceneElements(),
+          ))
       ) {
         if (import.meta.env.VITE_APP_DISABLE_PREVENT_UNLOAD !== "true") {
           preventUnload(event);
@@ -1976,6 +2026,80 @@ const ExcalidrawWrapper = () => {
     };
   }, [excalidrawAPI]);
 
+  const markFilesAsSaved = useCallback((savedSignature?: string) => {
+    if (savedSignature) {
+      lastSyncedCloudSaveSignatureRef.current = savedSignature;
+    }
+
+    if (excalidrawAPI) {
+      let didChange = false;
+
+      const elements = excalidrawAPI
+        .getSceneElementsIncludingDeleted()
+        .map((element) => {
+          if (DataStorage.fileStorage.shouldUpdateImageElementStatus(element)) {
+            const newElement = newElementWith(element, { status: "saved" });
+            if (newElement !== element) {
+              didChange = true;
+            }
+            return newElement;
+          }
+          return element;
+        });
+
+      if (didChange) {
+        ignoreNextCloudSavePendingRef.current = true;
+        excalidrawAPI.updateScene({
+          elements,
+          captureUpdate: CaptureUpdateAction.NEVER,
+        });
+      }
+    }
+
+    if (isRemoteStorageEnabled && getCloudProjectId()) {
+      const isSynced =
+        latestCloudSaveSignatureRef.current ===
+        lastSyncedCloudSaveSignatureRef.current;
+
+      updateCloudSaveStatus(isSynced ? "synced" : "pending");
+    }
+  }, [excalidrawAPI, updateCloudSaveStatus]);
+
+  const saveCloudProjectNow = useCallback(async () => {
+    if (!excalidrawAPI || !getCloudProjectId()) {
+      return;
+    }
+
+    updateCloudSaveStatus("saving");
+    const cloudSaveSignature = getCloudSaveSignature(
+      excalidrawAPI.getSceneElementsIncludingDeleted(),
+      excalidrawAPI.getAppState(),
+    );
+    latestCloudSaveSignatureRef.current = cloudSaveSignature;
+
+    try {
+      await RemoteData.saveNow(
+        excalidrawAPI.getSceneElementsIncludingDeleted(),
+        excalidrawAPI.getAppState(),
+        excalidrawAPI.getFiles(),
+        () => markFilesAsSaved(cloudSaveSignature),
+      );
+      excalidrawAPI.setToast({
+        message: "Sincronizado en Cloud",
+        closable: true,
+        duration: 2500,
+      });
+    } catch (error) {
+      console.error(error);
+      updateCloudSaveStatus("pending");
+      setErrorMessage(
+        error instanceof CloudStorageError
+          ? error.message
+          : "No se pudo guardar el proyecto en la DB.",
+      );
+    }
+  }, [excalidrawAPI, markFilesAsSaved, updateCloudSaveStatus]);
+
   const onChange = (
     elements: readonly OrderedExcalidrawElement[],
     appState: AppState,
@@ -1988,33 +2112,26 @@ const ExcalidrawWrapper = () => {
     // this check is redundant, but since this is a hot path, it's best
     // not to evaludate the nested expression every time
     if (!DataStorage.isSavePaused()) {
-      DataStorage.save(elements, appState, files, () => {
-        if (excalidrawAPI) {
-          let didChange = false;
+      const cloudSaveSignature = isRemoteStorageEnabled
+        ? getCloudSaveSignature(elements, appState)
+        : null;
 
-          const elements = excalidrawAPI
-            .getSceneElementsIncludingDeleted()
-            .map((element) => {
-              if (
-                DataStorage.fileStorage.shouldUpdateImageElementStatus(element)
-              ) {
-                const newElement = newElementWith(element, { status: "saved" });
-                if (newElement !== element) {
-                  didChange = true;
-                }
-                return newElement;
-              }
-              return element;
-            });
+      if (cloudSaveSignature && getCloudProjectId()) {
+        latestCloudSaveSignatureRef.current = cloudSaveSignature;
 
-          if (didChange) {
-            excalidrawAPI.updateScene({
-              elements,
-              captureUpdate: CaptureUpdateAction.NEVER,
-            });
-          }
+        if (ignoreNextCloudSavePendingRef.current) {
+          ignoreNextCloudSavePendingRef.current = false;
+        } else if (
+          cloudSaveSignature === lastSyncedCloudSaveSignatureRef.current
+        ) {
+          updateCloudSaveStatus("synced");
+        } else if (cloudSaveStatusRef.current !== "saving") {
+          updateCloudSaveStatus("pending");
         }
-      });
+      }
+      DataStorage.save(elements, appState, files, () =>
+        markFilesAsSaved(cloudSaveSignature || undefined),
+      );
     }
 
     // Render the debug scene if the debug canvas is available
@@ -2258,6 +2375,14 @@ const ExcalidrawWrapper = () => {
             return null;
           }
 
+          let cloudSaveTitle = "Sincronizado con la DB";
+
+          if (cloudSaveStatus === "pending") {
+            cloudSaveTitle = "Guardar cambios en la DB";
+          } else if (cloudSaveStatus === "saving") {
+            cloudSaveTitle = "Guardando en la DB...";
+          }
+
           return (
             <div className="excalidraw-ui-top-right">
               {/* {excalidrawAPI?.getEditorInterface().formFactor === "desktop" && (
@@ -2274,6 +2399,26 @@ const ExcalidrawWrapper = () => {
                 }
                 editorInterface={editorInterface}
               />
+              {isRemoteStorageEnabled && getCloudProjectId() && (
+                <span title={cloudSaveTitle}>
+                  <Button
+                    className={clsx("cloud-save-button", {
+                      "cloud-save-button--saving": cloudSaveStatus === "saving",
+                    })}
+                    type="button"
+                    onSelect={saveCloudProjectNow}
+                    disabled={cloudSaveStatus !== "pending"}
+                    title={cloudSaveTitle}
+                    aria-label="Guardar cambios en la DB"
+                  >
+                    {cloudSaveStatus === "saving" ? (
+                      <span className="cloud-save-button__loader" />
+                    ) : (
+                      saveIcon
+                    )}
+                  </Button>
+                </span>
+              )}
             </div>
           );
         }}

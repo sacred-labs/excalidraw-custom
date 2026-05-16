@@ -125,6 +125,16 @@ export type RemoteProjectMetadata = {
   updatedAt: string;
 };
 
+let latestRemoteSceneVersion: number | null = null;
+
+export const getLatestRemoteSceneVersion = () => latestRemoteSceneVersion;
+
+const setLatestRemoteSceneVersion = (version: unknown) => {
+  if (typeof version === "number") {
+    latestRemoteSceneVersion = version;
+  }
+};
+
 export const listRemoteProjects = async () => {
   const response = await remoteFetch("/api/excalidraw/projects", {
     method: "GET",
@@ -174,6 +184,8 @@ export const getRemoteProjectMetadata = async () => {
 
   const { scene } = await response.json();
 
+  setLatestRemoteSceneVersion(scene?.version);
+
   return scene as RemoteProjectMetadata | null;
 };
 
@@ -197,6 +209,8 @@ export const saveRemoteProjectTitle = async (title: string) => {
   }
 
   const { scene } = await response.json();
+
+  setLatestRemoteSceneVersion(scene?.version);
 
   return scene as RemoteProjectMetadata;
 };
@@ -244,14 +258,16 @@ export const importFromRemoteStorage = async (): Promise<ImportedDataState | nul
 
     const { scene } = await response.json();
 
-    if (!scene) {
-      return null;
-    }
+      if (!scene) {
+        return null;
+      }
 
-    return {
-      elements: scene.elements || [],
-      appState: scene.appState || null,
-    };
+      setLatestRemoteSceneVersion(scene.version);
+
+      return {
+        elements: scene.elements || [],
+        appState: scene.appState || null,
+      };
   } catch (error) {
     cloudDebugError(error);
     return null;
@@ -268,6 +284,49 @@ class RemoteFileManager extends FileManager {
 type SavingLockTypes = "collaboration";
 
 export class RemoteData {
+  private static saveOnce = async (
+    elements: readonly ExcalidrawElement[],
+    appState: AppState,
+    files: BinaryFiles,
+    onFilesSaved: () => void,
+  ) => {
+    const projectId = getCloudProjectId();
+
+    if (!projectId) {
+      return;
+    }
+
+    const _appState = clearAppStateForLocalStorage(appState);
+
+    const filesResult = await this.fileStorage.saveFiles({
+      elements,
+      files,
+    });
+
+    if (filesResult.erroredFiles.size) {
+      throw new CloudStorageError("Save remote files failed");
+    }
+
+    const response = await remoteFetch("/api/excalidraw/scene", {
+      method: "PUT",
+      body: JSON.stringify({
+        projectId,
+        baseVersion: latestRemoteSceneVersion,
+        elements: getNonDeletedElements(elements),
+        appState: _appState,
+      }),
+    });
+
+    if (!response.ok) {
+      await throwCloudError("Save remote scene", response);
+    }
+
+    const { scene } = await response.json();
+
+    setLatestRemoteSceneVersion(scene?.version);
+    onFilesSaved();
+  };
+
   private static _save = debounce(
     async (
       elements: readonly ExcalidrawElement[],
@@ -275,32 +334,7 @@ export class RemoteData {
       files: BinaryFiles,
       onFilesSaved: () => void,
     ) => {
-      const projectId = getCloudProjectId();
-
-      if (!projectId) {
-        return;
-      }
-
-      const _appState = clearAppStateForLocalStorage(appState);
-
-      const response = await remoteFetch("/api/excalidraw/scene", {
-        method: "PUT",
-        body: JSON.stringify({
-          projectId,
-          elements: getNonDeletedElements(elements),
-          appState: _appState,
-        }),
-      });
-
-      if (!response.ok) {
-        await throwCloudError("Save remote scene", response);
-      }
-
-      await this.fileStorage.saveFiles({
-        elements,
-        files,
-      });
-      onFilesSaved();
+      await this.saveOnce(elements, appState, files, onFilesSaved);
     },
     SAVE_TO_REMOTE_STORAGE_TIMEOUT,
   );
@@ -318,6 +352,16 @@ export class RemoteData {
 
   static flushSave = () => {
     this._save.flush();
+  };
+
+  static saveNow = async (
+    elements: readonly ExcalidrawElement[],
+    appState: AppState,
+    files: BinaryFiles,
+    onFilesSaved: () => void,
+  ) => {
+    this._save.cancel();
+    await this.saveOnce(elements, appState, files, onFilesSaved);
   };
 
   private static locker = new Locker<SavingLockTypes>();
