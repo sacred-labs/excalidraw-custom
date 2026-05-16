@@ -125,6 +125,7 @@ import {
   CloudStorageError,
   createAndOpenRemoteProject,
   createRemoteProject,
+  deleteRemoteProject,
   getCloudProjectId,
   getRemoteAuthSession,
   getRemoteProjectMetadata,
@@ -316,6 +317,12 @@ const CloudProjectsList = () => {
     "loading",
   );
   const [error, setError] = useState<string | null>(null);
+  const [projectToDelete, setProjectToDelete] = useState<
+    (typeof projects)[number] | null
+  >(null);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -367,6 +374,34 @@ const CloudProjectsList = () => {
     padding: "12px 18px",
   } as const;
 
+  const handleDeleteProject = async () => {
+    if (!projectToDelete) {
+      return;
+    }
+
+    setDeletingProjectId(projectToDelete.projectId);
+    setError(null);
+
+    try {
+      await deleteRemoteProject(projectToDelete.projectId);
+      setProjects((projects) =>
+        projects.filter(
+          (project) => project.projectId !== projectToDelete.projectId,
+        ),
+      );
+      setProjectToDelete(null);
+    } catch (error) {
+      console.error(error);
+      setError(
+        error instanceof CloudStorageError
+          ? error.message
+          : "No se pudo eliminar el proyecto.",
+      );
+    } finally {
+      setDeletingProjectId(null);
+    }
+  };
+
   return (
     <div
       style={{
@@ -404,6 +439,9 @@ const CloudProjectsList = () => {
 
         {status === "loading" && <p>Cargando proyectos...</p>}
         {status === "error" && <p style={{ color: "#c92a2a" }}>{error}</p>}
+        {status !== "error" && error && (
+          <p style={{ color: "#c92a2a" }}>{error}</p>
+        )}
         {status === "ready" && !projects.length && (
           <section
             style={{
@@ -427,33 +465,165 @@ const CloudProjectsList = () => {
         {status === "ready" && !!projects.length && (
           <div style={{ display: "grid", gap: 12 }}>
             {projects.map((project) => (
-              <button
+              <article
                 key={project.projectId}
-                type="button"
-                onClick={() =>
-                  window.location.assign(`/projects/${project.projectId}`)
-                }
                 style={{
                   border: "1px solid #ded9cf",
                   borderRadius: 16,
                   background: "#fffdf8",
-                  cursor: "pointer",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  justifyContent: "space-between",
+                  gap: 16,
                   padding: 18,
-                  textAlign: "left",
                   boxShadow: "0 12px 40px rgba(31, 31, 31, 0.05)",
                 }}
               >
-                <strong style={{ display: "block", marginBottom: 6 }}>
-                  {project.title || `Proyecto ${project.projectId.slice(0, 8)}`}
-                </strong>
-                <span style={{ color: "#625d56", display: "block" }}>
-                  UUID: {project.projectId}
-                </span>
-                <span style={{ color: "#625d56", display: "block" }}>
-                  Actualizado: {new Date(project.updatedAt).toLocaleString()}
-                </span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    window.location.assign(`/projects/${project.projectId}`)
+                  }
+                  style={{
+                    background: "transparent",
+                    border: 0,
+                    color: "inherit",
+                    cursor: "pointer",
+                    flex: 1,
+                    minWidth: 240,
+                    padding: 0,
+                    textAlign: "left",
+                  }}
+                >
+                  <strong style={{ display: "block", marginBottom: 6 }}>
+                    {project.title ||
+                      `Proyecto ${project.projectId.slice(0, 8)}`}
+                  </strong>
+                  <span style={{ color: "#625d56", display: "block" }}>
+                    UUID: {project.projectId}
+                  </span>
+                  <span style={{ color: "#625d56", display: "block" }}>
+                    Actualizado: {new Date(project.updatedAt).toLocaleString()}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingProjectId === project.projectId}
+                  onClick={() => setProjectToDelete(project)}
+                  style={{
+                    alignSelf: "center",
+                    background: "#fff1f1",
+                    border: "1px solid #ffc9c9",
+                    borderRadius: 12,
+                    color: "#c92a2a",
+                    cursor:
+                      deletingProjectId === project.projectId
+                        ? "default"
+                        : "pointer",
+                    fontSize: 14,
+                    fontWeight: 700,
+                    opacity: deletingProjectId === project.projectId ? 0.65 : 1,
+                    padding: "10px 14px",
+                  }}
+                >
+                  {deletingProjectId === project.projectId
+                    ? "Eliminando..."
+                    : "Eliminar"}
+                </button>
+              </article>
             ))}
+          </div>
+        )}
+        {projectToDelete && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-project-title"
+            style={{
+              alignItems: "center",
+              background: "rgba(31, 31, 31, 0.45)",
+              display: "flex",
+              inset: 0,
+              justifyContent: "center",
+              padding: 24,
+              position: "fixed",
+              zIndex: 1000,
+            }}
+          >
+            <div
+              style={{
+                background: "#fffdf8",
+                border: "1px solid #ded9cf",
+                borderRadius: 20,
+                boxShadow: "0 24px 80px rgba(31, 31, 31, 0.2)",
+                maxWidth: 460,
+                padding: 24,
+                width: "100%",
+              }}
+            >
+              <h2
+                id="delete-project-title"
+                style={{ fontSize: 24, margin: "0 0 10px" }}
+              >
+                Eliminar proyecto
+              </h2>
+              <p style={{ color: "#625d56", lineHeight: 1.5, marginTop: 0 }}>
+                Esta acción eliminará permanentemente el proyecto, sus trazos,
+                configuración e imágenes asociadas. No se puede deshacer.
+              </p>
+              <p style={{ fontWeight: 700 }}>
+                {projectToDelete.title ||
+                  `Proyecto ${projectToDelete.projectId.slice(0, 8)}`}
+              </p>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  justifyContent: "flex-end",
+                  marginTop: 22,
+                }}
+              >
+                <button
+                  type="button"
+                  disabled={deletingProjectId === projectToDelete.projectId}
+                  onClick={() => setProjectToDelete(null)}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid #ded9cf",
+                    borderRadius: 12,
+                    color: "#1f1f1f",
+                    cursor: "pointer",
+                    fontWeight: 700,
+                    padding: "11px 16px",
+                  }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={deletingProjectId === projectToDelete.projectId}
+                  onClick={handleDeleteProject}
+                  style={{
+                    background: "#c92a2a",
+                    border: 0,
+                    borderRadius: 12,
+                    color: "#fff",
+                    cursor:
+                      deletingProjectId === projectToDelete.projectId
+                        ? "default"
+                        : "pointer",
+                    fontWeight: 700,
+                    opacity:
+                      deletingProjectId === projectToDelete.projectId ? 0.7 : 1,
+                    padding: "11px 16px",
+                  }}
+                >
+                  {deletingProjectId === projectToDelete.projectId
+                    ? "Eliminando..."
+                    : "Eliminar todo"}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </main>

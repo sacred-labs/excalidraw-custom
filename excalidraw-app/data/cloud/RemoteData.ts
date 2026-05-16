@@ -11,7 +11,7 @@ import type {
 } from "@excalidraw/excalidraw/types";
 import type { ImportedDataState } from "@excalidraw/excalidraw/data/types";
 
-import { SAVE_TO_LOCAL_STORAGE_TIMEOUT } from "../../app_constants";
+import { SAVE_TO_REMOTE_STORAGE_TIMEOUT } from "../../app_constants";
 
 import { FileManager } from "../FileManager";
 import { FileStatusStore } from "../fileStatusStore";
@@ -141,6 +141,17 @@ export const listRemoteProjects = async () => {
     authenticated: true as const,
     projects: (data.projects || []) as RemoteProject[],
   };
+};
+
+export const deleteRemoteProject = async (projectId: string) => {
+  const response = await remoteFetch("/api/excalidraw/projects", {
+    method: "DELETE",
+    body: JSON.stringify({ projectId }),
+  });
+
+  if (!response.ok) {
+    await throwCloudError("Delete remote project", response);
+  }
 };
 
 export const getRemoteProjectMetadata = async () => {
@@ -288,7 +299,7 @@ export class RemoteData {
       });
       onFilesSaved();
     },
-    SAVE_TO_LOCAL_STORAGE_TIMEOUT,
+    SAVE_TO_REMOTE_STORAGE_TIMEOUT,
   );
 
   static save = (
