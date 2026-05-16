@@ -2,6 +2,8 @@ import {
   // loginIcon,
   // ExcalLogo,
   eyeIcon,
+  LoadIcon,
+  PlusIcon,
 } from "@excalidraw/excalidraw/components/icons";
 import { MainMenu } from "@excalidraw/excalidraw/index";
 import React from "react";
@@ -22,6 +24,9 @@ export const AppMainMenu: React.FC<{
   theme: Theme | "system";
   setTheme: (theme: Theme | "system") => void;
   refresh: () => void;
+  cloudStorageEnabled?: boolean;
+  onCreateCloudProject?: () => void;
+  onOpenCloudProjects?: () => void;
 }> = React.memo((props) => {
   return (
     <MainMenu>
@@ -39,6 +44,23 @@ export const AppMainMenu: React.FC<{
       <MainMenu.DefaultItems.SearchMenu />
       <MainMenu.DefaultItems.Help />
       <MainMenu.DefaultItems.ClearCanvas />
+      {props.cloudStorageEnabled && (
+        <>
+          <MainMenu.Separator />
+          <MainMenu.Item
+            icon={PlusIcon}
+            onSelect={() => props.onCreateCloudProject?.()}
+          >
+            Nuevo proyecto
+          </MainMenu.Item>
+          <MainMenu.Item
+            icon={LoadIcon}
+            onSelect={() => props.onOpenCloudProjects?.()}
+          >
+            Ir a proyectos
+          </MainMenu.Item>
+        </>
+      )}
       <MainMenu.Separator />
       {/* <MainMenu.ItemLink
         icon={ExcalLogo}

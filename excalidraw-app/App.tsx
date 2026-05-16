@@ -121,6 +121,19 @@ import {
   importFromLocalStorage,
   importUsernameFromLocalStorage,
 } from "./data/localStorage";
+import {
+  CloudStorageError,
+  createAndOpenRemoteProject,
+  createRemoteProject,
+  getCloudProjectId,
+  getRemoteAuthSession,
+  getRemoteProjectMetadata,
+  importFromRemoteStorage,
+  listRemoteProjects,
+  RemoteData,
+  saveRemoteProjectTitle,
+} from "./data/cloud/RemoteData";
+import { getCloudLoginUrl } from "./data/cloud/config";
 
 import { loadFilesFromFirebase } from "./data/firebase";
 import {
@@ -149,6 +162,431 @@ import "./index.scss";
 import { AppSidebar } from "./components/AppSidebar";
 
 import type { CollabAPI } from "./collab/Collab";
+
+const isRemoteStorageEnabled =
+  import.meta.env.VITE_APP_REMOTE_STORAGE === "true";
+const DataStorage = isRemoteStorageEnabled ? RemoteData : LocalData;
+
+const CloudProjectsHome = () => {
+  const [authStatus, setAuthStatus] = useState<
+    "loading" | "authenticated" | "unauthenticated"
+  >("loading");
+  const [isCreating, setIsCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const shouldCreateAfterLogin = new URLSearchParams(
+      window.location.search,
+    ).get("createProject") === "1";
+
+    getRemoteAuthSession()
+      .then((session) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (session.authenticated) {
+          setAuthStatus("authenticated");
+          if (shouldCreateAfterLogin) {
+            createProject();
+          }
+          return;
+        }
+
+        setAuthStatus("unauthenticated");
+      })
+      .catch((error) => {
+        console.error(error);
+        if (!cancelled) {
+          setAuthStatus("unauthenticated");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const createProject = async () => {
+    const projectId = window.crypto.randomUUID();
+
+    setIsCreating(true);
+    setError(null);
+
+    try {
+      const session = await getRemoteAuthSession();
+
+      if (!session.authenticated) {
+        window.location.assign(getCloudLoginUrl("/?createProject=1"));
+        return;
+      }
+
+      await createRemoteProject(projectId);
+      window.location.assign(`/projects/${projectId}`);
+    } catch (error) {
+      console.error(error);
+      setError(
+        error instanceof CloudStorageError
+          ? error.message
+          : "No se pudo crear el proyecto. Verifica la sesión y la API.",
+      );
+      setIsCreating(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        background: "#f8f6f2",
+        color: "#1f1f1f",
+        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+        padding: 24,
+      }}
+    >
+      <main
+        style={{
+          width: "min(560px, 100%)",
+          padding: 32,
+          border: "1px solid #ded9cf",
+          borderRadius: 20,
+          background: "#fffdf8",
+          boxShadow: "0 24px 80px rgba(31, 31, 31, 0.08)",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ width: 72, margin: "0 auto 20px" }}>{ExcalLogo}</div>
+        <h1 style={{ fontSize: 34, lineHeight: 1.1, margin: "0 0 12px" }}>
+          Sacred Draw
+        </h1>
+        {authStatus !== "loading" ? (
+          <>
+            <p style={{ fontSize: 16, margin: "0 0 28px", color: "#5f5a52" }}>
+              Crea un proyecto nuevo para guardar tu board en la nube con una
+              URL única.
+            </p>
+            <button
+              type="button"
+              onClick={createProject}
+              disabled={isCreating}
+              style={{
+                border: 0,
+                borderRadius: 12,
+                background: "#1f1f1f",
+                color: "#fff",
+                cursor: isCreating ? "default" : "pointer",
+                fontSize: 16,
+                fontWeight: 700,
+                padding: "14px 22px",
+                opacity: isCreating ? 0.7 : 1,
+              }}
+            >
+              {isCreating ? "Creando..." : "Crear nuevo"}
+            </button>
+          </>
+        ) : (
+          <p style={{ fontSize: 16, margin: "0", color: "#5f5a52" }}>
+            Verificando sesión...
+          </p>
+        )}
+        {error && (
+          <p style={{ color: "#c92a2a", margin: "18px 0 0", fontSize: 14 }}>
+            {error}
+          </p>
+        )}
+      </main>
+    </div>
+  );
+};
+
+const CloudProjectsList = () => {
+  const [projects, setProjects] = useState<
+    Array<{
+      projectId: string;
+      title: string | null;
+      version: number;
+      createdAt: string;
+      updatedAt: string;
+    }>
+  >([]);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    listRemoteProjects()
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (!result.authenticated) {
+          window.location.assign(getCloudLoginUrl("/projects"));
+          return;
+        }
+
+        if (!result.projects.length) {
+          window.location.assign("/");
+          return;
+        }
+
+        setProjects(result.projects);
+        setStatus("ready");
+      })
+      .catch((error) => {
+        console.error(error);
+        if (!cancelled) {
+          setError(
+            error instanceof CloudStorageError
+              ? error.message
+              : "No se pudieron cargar los proyectos.",
+          );
+          setStatus("error");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const buttonStyle = {
+    border: 0,
+    borderRadius: 12,
+    background: "#1f1f1f",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 15,
+    fontWeight: 700,
+    padding: "12px 18px",
+  } as const;
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        background: "#f8f6f2",
+        color: "#1f1f1f",
+        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+        padding: 24,
+      }}
+    >
+      <main style={{ maxWidth: 920, margin: "0 auto" }}>
+        <header
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 16,
+            marginBottom: 24,
+          }}
+        >
+          <div>
+            <h1 style={{ fontSize: 34, margin: "0 0 8px" }}>Proyectos</h1>
+            <p style={{ margin: 0, color: "#625d56" }}>
+              Tus boards guardados en la nube.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => createAndOpenRemoteProject("self")}
+            style={buttonStyle}
+          >
+            Nuevo proyecto
+          </button>
+        </header>
+
+        {status === "loading" && <p>Cargando proyectos...</p>}
+        {status === "error" && <p style={{ color: "#c92a2a" }}>{error}</p>}
+        {status === "ready" && !projects.length && (
+          <section
+            style={{
+              border: "1px solid #ded9cf",
+              borderRadius: 18,
+              background: "#fffdf8",
+              padding: 28,
+              textAlign: "center",
+            }}
+          >
+            <p style={{ marginTop: 0 }}>Aún no tienes proyectos.</p>
+            <button
+              type="button"
+              onClick={() => createAndOpenRemoteProject("self")}
+              style={buttonStyle}
+            >
+              Crear el primero
+            </button>
+          </section>
+        )}
+        {status === "ready" && !!projects.length && (
+          <div style={{ display: "grid", gap: 12 }}>
+            {projects.map((project) => (
+              <button
+                key={project.projectId}
+                type="button"
+                onClick={() =>
+                  window.location.assign(`/projects/${project.projectId}`)
+                }
+                style={{
+                  border: "1px solid #ded9cf",
+                  borderRadius: 16,
+                  background: "#fffdf8",
+                  cursor: "pointer",
+                  padding: 18,
+                  textAlign: "left",
+                  boxShadow: "0 12px 40px rgba(31, 31, 31, 0.05)",
+                }}
+              >
+                <strong style={{ display: "block", marginBottom: 6 }}>
+                  {project.title || `Proyecto ${project.projectId.slice(0, 8)}`}
+                </strong>
+                <span style={{ color: "#625d56", display: "block" }}>
+                  UUID: {project.projectId}
+                </span>
+                <span style={{ color: "#625d56", display: "block" }}>
+                  Actualizado: {new Date(project.updatedAt).toLocaleString()}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </main>
+    </div>
+  );
+};
+
+const CloudProjectAccessMessage = ({
+  type,
+}: {
+  type: "loading" | "redirecting" | "forbidden" | "missing";
+}) => {
+  const content = {
+    loading: {
+      title: "Verificando proyecto...",
+      message: "Estamos validando tu sesión y permisos.",
+    },
+    redirecting: {
+      title: "No has iniciado sesión",
+      message: "Te estamos redirigiendo para iniciar sesión.",
+    },
+    forbidden: {
+      title: "Este proyecto no te pertenece",
+      message:
+        "Este proyecto pertenece a otro usuario. Pídele permiso para colaborar en este proyecto.",
+    },
+    missing: {
+      title: "Proyecto no encontrado",
+      message: "El enlace no existe o el proyecto fue eliminado.",
+    },
+  }[type];
+
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "grid",
+        placeItems: "center",
+        background: "#f8f6f2",
+        color: "#1f1f1f",
+        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+        padding: 24,
+      }}
+    >
+      <main
+        style={{
+          width: "min(560px, 100%)",
+          padding: 32,
+          border: "1px solid #ded9cf",
+          borderRadius: 20,
+          background: "#fffdf8",
+          boxShadow: "0 24px 80px rgba(31, 31, 31, 0.08)",
+          textAlign: "center",
+        }}
+      >
+        <h1 style={{ fontSize: 28, margin: "0 0 12px" }}>{content.title}</h1>
+        <p style={{ color: "#625d56", margin: "0 0 22px" }}>
+          {content.message}
+        </p>
+        {type === "redirecting" && (
+          <button
+            type="button"
+            onClick={() => window.location.assign(getCloudLoginUrl())}
+            style={{
+              border: 0,
+              borderRadius: 12,
+              background: "#1f1f1f",
+              color: "#fff",
+              cursor: "pointer",
+              fontSize: 15,
+              fontWeight: 700,
+              padding: "12px 18px",
+            }}
+          >
+            Ir a iniciar sesión
+          </button>
+        )}
+      </main>
+    </div>
+  );
+};
+
+const CloudProjectAccessGate = ({ children }: { children: React.ReactNode }) => {
+  const [status, setStatus] = useState<
+    "loading" | "ready" | "redirecting" | "forbidden" | "missing"
+  >("loading");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getRemoteProjectMetadata()
+      .then(() => {
+        if (!cancelled) {
+          setStatus("ready");
+        }
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (error instanceof CloudStorageError) {
+          if (error.status === 401) {
+            setStatus("redirecting");
+            window.setTimeout(() => {
+              window.location.assign(getCloudLoginUrl());
+            }, 1200);
+            return;
+          }
+          if (error.status === 403) {
+            setStatus("forbidden");
+            return;
+          }
+          if (error.status === 404) {
+            setStatus("missing");
+            return;
+          }
+        }
+
+        setStatus("missing");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (status !== "ready") {
+    return <CloudProjectAccessMessage type={status} />;
+  }
+
+  return <>{children}</>;
+};
 
 polyfill();
 
@@ -229,7 +667,9 @@ const initializeScene = async (opts: {
   );
   const externalUrlMatch = window.location.hash.match(/^#url=(.*)$/);
 
-  const localDataState = importFromLocalStorage();
+  const localDataState = isRemoteStorageEnabled && getCloudProjectId()
+    ? (await importFromRemoteStorage()) || { elements: [], appState: null }
+    : importFromLocalStorage();
 
   let scene: Omit<
     RestoredDataState,
@@ -419,6 +859,106 @@ const ExcalidrawWrapper = () => {
   });
 
   const [, forceRefresh] = useState(false);
+  const [projectTitle, setProjectTitle] = useState<string | null>(null);
+  const [isTitleModalOpen, setIsTitleModalOpen] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const [isSavingTitle, setIsSavingTitle] = useState(false);
+  const [titleError, setTitleError] = useState<string | null>(null);
+
+  const loadProjectMetadata = useCallback(async () => {
+    const projectId = getCloudProjectId();
+
+    if (!isRemoteStorageEnabled || !projectId) {
+      document.title = APP_NAME;
+      return;
+    }
+
+    const titleCacheKey = `excalidraw-cloud-title:${projectId}`;
+    const cachedTitle = sessionStorage.getItem(titleCacheKey)?.trim() || null;
+
+    if (cachedTitle) {
+      setProjectTitle(cachedTitle);
+      setTitleDraft(cachedTitle);
+      setIsTitleModalOpen(false);
+      document.title = `${cachedTitle} | ${APP_NAME}`;
+    }
+
+    const metadata = await getRemoteProjectMetadata();
+    const title = metadata?.title?.trim() || null;
+
+    if (title) {
+      sessionStorage.setItem(titleCacheKey, title);
+      setProjectTitle(title);
+      setTitleDraft(title);
+      setIsTitleModalOpen(false);
+      document.title = `${title} | ${APP_NAME}`;
+      return;
+    }
+
+    sessionStorage.removeItem(titleCacheKey);
+    setProjectTitle(null);
+    setTitleDraft("");
+    setIsTitleModalOpen(true);
+    document.title = APP_NAME;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshProjectMetadata = () => {
+      loadProjectMetadata().catch((error) => {
+        if (!cancelled) {
+          console.error(error);
+        }
+      });
+    };
+
+    refreshProjectMetadata();
+
+    window.addEventListener("pageshow", refreshProjectMetadata);
+    window.addEventListener(EVENT.FOCUS, refreshProjectMetadata);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener("pageshow", refreshProjectMetadata);
+      window.removeEventListener(EVENT.FOCUS, refreshProjectMetadata);
+    };
+  }, [loadProjectMetadata]);
+
+  const saveProjectTitle = async () => {
+    const title = titleDraft.trim();
+
+    if (!title) {
+      setTitleError("El proyecto necesita un título.");
+      return;
+    }
+
+    setIsSavingTitle(true);
+    setTitleError(null);
+
+    try {
+      const metadata = await saveRemoteProjectTitle(title);
+      const savedTitle = metadata.title || title;
+      const projectId = getCloudProjectId();
+
+      if (projectId) {
+        sessionStorage.setItem(`excalidraw-cloud-title:${projectId}`, savedTitle);
+      }
+
+      setProjectTitle(savedTitle);
+      setIsTitleModalOpen(false);
+      document.title = `${savedTitle} | ${APP_NAME}`;
+    } catch (error) {
+      console.error(error);
+      setTitleError(
+        error instanceof CloudStorageError
+          ? error.message
+          : "No se pudo guardar el título.",
+      );
+    } finally {
+      setIsSavingTitle(false);
+    }
+  };
 
   useEffect(() => {
     if (isDevEnv()) {
@@ -496,7 +1036,7 @@ const ExcalidrawWrapper = () => {
           });
         } else if (isInitialLoad) {
           if (fileIds.length) {
-            LocalData.fileStorage
+            DataStorage.fileStorage
               .getFiles(fileIds)
               .then(async ({ loadedFiles, erroredFiles }) => {
                 if (loadedFiles.length) {
@@ -511,7 +1051,7 @@ const ExcalidrawWrapper = () => {
           }
           // on fresh load, clear unused files from IDB (from previous
           // session)
-          LocalData.fileStorage.clearObsoleteFiles({
+          DataStorage.fileStorage.clearObsoleteFiles({
             currentFileIds: fileIds,
           });
         }
@@ -566,7 +1106,10 @@ const ExcalidrawWrapper = () => {
         ((collabAPI && !collabAPI.isCollaborating()) || isCollabDisabled)
       ) {
         // don't sync if local state is newer or identical to browser state
-        if (isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)) {
+        if (
+          !isRemoteStorageEnabled &&
+          isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)
+        ) {
           const localDataState = importFromLocalStorage();
           const username = importUsernameFromLocalStorage();
           setLangCode(getPreferredLanguage());
@@ -584,7 +1127,10 @@ const ExcalidrawWrapper = () => {
           collabAPI?.setUsername(username || "");
         }
 
-        if (isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_FILES)) {
+        if (
+          !isRemoteStorageEnabled &&
+          isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_FILES)
+        ) {
           const elements = excalidrawAPI.getSceneElementsIncludingDeleted();
           const currFiles = excalidrawAPI.getFiles();
           const fileIds =
@@ -599,7 +1145,7 @@ const ExcalidrawWrapper = () => {
               return acc;
             }, [] as FileId[]) || [];
           if (fileIds.length) {
-            LocalData.fileStorage
+            DataStorage.fileStorage
               .getFiles(fileIds)
               .then(({ loadedFiles, erroredFiles }) => {
                 if (loadedFiles.length) {
@@ -617,12 +1163,12 @@ const ExcalidrawWrapper = () => {
     }, SYNC_BROWSER_TABS_TIMEOUT);
 
     const onUnload = () => {
-      LocalData.flushSave();
+      DataStorage.flushSave();
     };
 
     const visibilityChange = (event: FocusEvent | Event) => {
       if (event.type === EVENT.BLUR || document.hidden) {
-        LocalData.flushSave();
+        DataStorage.flushSave();
       }
       if (
         event.type === EVENT.VISIBILITY_CHANGE ||
@@ -652,11 +1198,11 @@ const ExcalidrawWrapper = () => {
 
   useEffect(() => {
     const unloadHandler = (event: BeforeUnloadEvent) => {
-      LocalData.flushSave();
+      DataStorage.flushSave();
 
       if (
         excalidrawAPI &&
-        LocalData.fileStorage.shouldPreventUnload(
+        DataStorage.fileStorage.shouldPreventUnload(
           excalidrawAPI.getSceneElements(),
         )
       ) {
@@ -686,8 +1232,8 @@ const ExcalidrawWrapper = () => {
 
     // this check is redundant, but since this is a hot path, it's best
     // not to evaludate the nested expression every time
-    if (!LocalData.isSavePaused()) {
-      LocalData.save(elements, appState, files, () => {
+    if (!DataStorage.isSavePaused()) {
+      DataStorage.save(elements, appState, files, () => {
         if (excalidrawAPI) {
           let didChange = false;
 
@@ -695,7 +1241,7 @@ const ExcalidrawWrapper = () => {
             .getSceneElementsIncludingDeleted()
             .map((element) => {
               if (
-                LocalData.fileStorage.shouldUpdateImageElementStatus(element)
+                DataStorage.fileStorage.shouldUpdateImageElementStatus(element)
               ) {
                 const newElement = newElementWith(element, { status: "saved" });
                 if (newElement !== element) {
@@ -990,10 +1536,91 @@ const ExcalidrawWrapper = () => {
           theme={appTheme}
           setTheme={(theme) => setAppTheme(theme)}
           refresh={() => forceRefresh((prev) => !prev)}
+          cloudStorageEnabled={isRemoteStorageEnabled}
+          onCreateCloudProject={() => createAndOpenRemoteProject("blank")}
+          onOpenCloudProjects={() => window.location.assign("/projects")}
         />
         <div className="excalidraw-custom-app-title">
-          Excalidraw Custom Infrastructure
+          {projectTitle || "Excalidraw Custom Infrastructure"}
         </div>
+        {isTitleModalOpen && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1000,
+              display: "grid",
+              placeItems: "center",
+              background: "rgba(14, 14, 18, 0.55)",
+              padding: 24,
+            }}
+          >
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                saveProjectTitle();
+              }}
+              style={{
+                width: "min(420px, 100%)",
+                borderRadius: 18,
+                background: "var(--popup-bg-color, #232329)",
+                color: "var(--text-primary-color, #f4f4f5)",
+                boxShadow: "0 24px 80px rgba(0, 0, 0, 0.35)",
+                padding: 24,
+              }}
+            >
+              <h2 style={{ fontSize: 20, margin: "0 0 8px" }}>
+                Nombra tu proyecto
+              </h2>
+              <p style={{ color: "#a8a5b5", margin: "0 0 18px" }}>
+                Este título aparecerá en el board, la pestaña del navegador y el
+                listado de proyectos.
+              </p>
+              <input
+                autoFocus
+                value={titleDraft}
+                onChange={(event) => setTitleDraft(event.target.value)}
+                placeholder="Ej. Mapa mental de campaña"
+                maxLength={255}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  border: "1px solid #4f4b63",
+                  borderRadius: 10,
+                  background: "#15151a",
+                  color: "#fff",
+                  fontSize: 15,
+                  padding: "12px 14px",
+                  outline: "none",
+                }}
+              />
+              {titleError && (
+                <p style={{ color: "#ff8787", margin: "12px 0 0" }}>
+                  {titleError}
+                </p>
+              )}
+              <button
+                type="submit"
+                disabled={isSavingTitle}
+                style={{
+                  width: "100%",
+                  border: 0,
+                  borderRadius: 10,
+                  background: "#a899ff",
+                  color: "#17151f",
+                  cursor: isSavingTitle ? "default" : "pointer",
+                  fontSize: 15,
+                  fontWeight: 700,
+                  marginTop: 18,
+                  padding: "12px 14px",
+                  opacity: isSavingTitle ? 0.75 : 1,
+                }}
+              >
+                {isSavingTitle ? "Guardando..." : "Guardar título"}
+              </button>
+            </form>
+          </div>
+        )}
         <AppWelcomeScreen
           onCollabDialogOpen={onCollabDialogOpen}
           isCollabEnabled={!isCollabDisabled}
@@ -1274,6 +1901,35 @@ const ExcalidrawApp = () => {
     window.location.pathname === "/excalidraw-plus-export";
   if (isCloudExportWindow) {
     return <ExcalidrawPlusIframeExport />;
+  }
+
+  if (
+    isRemoteStorageEnabled &&
+    window.location.pathname === "/" &&
+    (!window.location.search ||
+      new URLSearchParams(window.location.search).get("createProject") === "1") &&
+    !window.location.hash &&
+    !getCloudProjectId()
+  ) {
+    return <CloudProjectsHome />;
+  }
+
+  if (isRemoteStorageEnabled && window.location.pathname === "/projects") {
+    return <CloudProjectsList />;
+  }
+
+  if (isRemoteStorageEnabled && getCloudProjectId()) {
+    return (
+      <TopErrorBoundary>
+        <CloudProjectAccessGate>
+          <Provider store={appJotaiStore}>
+            <ExcalidrawAPIProvider>
+              <ExcalidrawWrapper />
+            </ExcalidrawAPIProvider>
+          </Provider>
+        </CloudProjectAccessGate>
+      </TopErrorBoundary>
+    );
   }
 
   return (
