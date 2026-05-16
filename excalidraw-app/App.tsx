@@ -619,34 +619,8 @@ const CloudProjectsList = ({ view }: { view: "drafts" | "settings" }) => {
               }}
             >
               <div>
-                <div style={{ display: "flex", gap: 7, marginBottom: 20 }}>
-                  <span
-                    style={{
-                      background: "#f4a62a",
-                      borderRadius: 999,
-                      height: 9,
-                      width: 9,
-                    }}
-                  />
-                  <span
-                    style={{
-                      background: "#2f63d8",
-                      borderRadius: 999,
-                      height: 9,
-                      width: 9,
-                    }}
-                  />
-                  <span
-                    style={{
-                      background: "#d93434",
-                      borderRadius: 999,
-                      height: 9,
-                      width: 9,
-                    }}
-                  />
-                </div>
-                <h1 style={{ fontSize: 24, margin: 0 }}>
-                  {isSettingsView ? "Account Settings" : "Sacred Drafts"}
+                <h1 style={{ fontSize: 36, margin: 0 }}>
+                  {isSettingsView ? "Account Settings" : "Zuanbase Drafts"}
                 </h1>
               </div>
               <button
@@ -938,7 +912,7 @@ const CloudProjectsList = ({ view }: { view: "drafts" | "settings" }) => {
                                 ? "default"
                                 : "pointer",
                             fontSize: 12,
-                            fontWeight: 800,
+                            fontWeight: 700,
                             marginTop: 16,
                             padding: "9px 12px",
                             transition: "background 160ms ease",
@@ -1055,8 +1029,8 @@ const CloudProjectsList = ({ view }: { view: "drafts" | "settings" }) => {
                             deletingProjectId === project.projectId
                               ? "default"
                               : "pointer",
-                          fontSize: 12,
-                          fontWeight: 800,
+                          fontSize: 16,
+                          fontWeight: 700,
                           opacity:
                             deletingProjectId === project.projectId ? 0.55 : 1,
                           padding: 0,
