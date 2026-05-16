@@ -84,6 +84,9 @@ export default defineConfig(({ mode }) => {
         },
       ],
     },
+    optimizeDeps: {
+      include: ["react-icons/fi"],
+    },
     build: {
       outDir: "build",
       rollupOptions: {

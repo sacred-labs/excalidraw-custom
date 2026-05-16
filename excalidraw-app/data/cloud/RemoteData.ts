@@ -28,8 +28,11 @@ import {
 
 export { CloudStorageError } from "./config";
 
+export const CLOUD_DRAFTS_PATH = "/overview/drafts";
+export const CLOUD_SETTINGS_PATH = "/overview/settings";
+
 const CLOUD_PROJECT_PATH_RE =
-  /^\/projects\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/?$/i;
+  /^\/overview\/drafts\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/?$/i;
 
 const remoteFetch = async (path: string, init?: RequestInit) => {
   const url = `${CLOUD_API_URL}${path}`;
@@ -97,7 +100,7 @@ export const createAndOpenRemoteProject = async (target: "self" | "blank") => {
 
   await createRemoteProject(projectId);
 
-  const url = `/projects/${projectId}`;
+  const url = `${CLOUD_DRAFTS_PATH}/${projectId}`;
 
   if (target === "blank") {
     window.open(url, "_blank", "noopener,noreferrer");

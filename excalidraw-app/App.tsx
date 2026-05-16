@@ -35,6 +35,14 @@ import {
 } from "@excalidraw/common";
 import polyfill from "@excalidraw/excalidraw/polyfill";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  FiFileText,
+  FiGrid,
+  FiList,
+  FiMenu,
+  FiPlus,
+  FiSettings,
+} from "react-icons/fi";
 import { loadFromBlob } from "@excalidraw/excalidraw/data/blob";
 import { t } from "@excalidraw/excalidraw/i18n";
 
@@ -123,6 +131,8 @@ import {
 } from "./data/localStorage";
 import {
   CloudStorageError,
+  CLOUD_DRAFTS_PATH,
+  CLOUD_SETTINGS_PATH,
   createAndOpenRemoteProject,
   createRemoteProject,
   deleteRemoteProject,
@@ -167,6 +177,7 @@ import type { CollabAPI } from "./collab/Collab";
 const isRemoteStorageEnabled =
   import.meta.env.VITE_APP_REMOTE_STORAGE === "true";
 const DataStorage = isRemoteStorageEnabled ? RemoteData : LocalData;
+const CLOUD_PROJECT_VIEW_STORAGE_KEY = "sacred-draw-cloud-project-view";
 
 const CloudProjectsHome = () => {
   const [authStatus, setAuthStatus] = useState<
@@ -177,9 +188,6 @@ const CloudProjectsHome = () => {
 
   useEffect(() => {
     let cancelled = false;
-    const shouldCreateAfterLogin = new URLSearchParams(
-      window.location.search,
-    ).get("createProject") === "1";
 
     getRemoteAuthSession()
       .then((session) => {
@@ -189,9 +197,6 @@ const CloudProjectsHome = () => {
 
         if (session.authenticated) {
           setAuthStatus("authenticated");
-          if (shouldCreateAfterLogin) {
-            createProject();
-          }
           return;
         }
 
@@ -219,12 +224,12 @@ const CloudProjectsHome = () => {
       const session = await getRemoteAuthSession();
 
       if (!session.authenticated) {
-        window.location.assign(getCloudLoginUrl("/?createProject=1"));
+        window.location.assign(getCloudLoginUrl(CLOUD_DRAFTS_PATH));
         return;
       }
 
       await createRemoteProject(projectId);
-      window.location.assign(`/projects/${projectId}`);
+      window.location.assign(`${CLOUD_DRAFTS_PATH}/${projectId}`);
     } catch (error) {
       console.error(error);
       setError(
@@ -266,26 +271,41 @@ const CloudProjectsHome = () => {
         {authStatus !== "loading" ? (
           <>
             <p style={{ fontSize: 16, margin: "0 0 28px", color: "#5f5a52" }}>
-              Crea un proyecto nuevo para guardar tu board en la nube con una
-              URL única.
+              {authStatus === "authenticated"
+                ? "Continúa trabajando en tus drafts guardados en la nube."
+                : "Crea un proyecto nuevo para guardar tu board en la nube con una URL única."}
             </p>
             <button
               type="button"
-              onClick={createProject}
-              disabled={isCreating}
+              onClick={() => {
+                if (authStatus === "authenticated") {
+                  window.location.assign(CLOUD_DRAFTS_PATH);
+                  return;
+                }
+
+                createProject();
+              }}
+              disabled={authStatus !== "authenticated" && isCreating}
               style={{
                 border: 0,
                 borderRadius: 12,
                 background: "#1f1f1f",
                 color: "#fff",
-                cursor: isCreating ? "default" : "pointer",
+                cursor:
+                  authStatus !== "authenticated" && isCreating
+                    ? "default"
+                    : "pointer",
                 fontSize: 16,
                 fontWeight: 700,
                 padding: "14px 22px",
-                opacity: isCreating ? 0.7 : 1,
+                opacity: authStatus !== "authenticated" && isCreating ? 0.7 : 1,
               }}
             >
-              {isCreating ? "Creando..." : "Crear nuevo"}
+              {authStatus === "authenticated"
+                ? "Dashboard"
+                : isCreating
+                  ? "Creando..."
+                  : "Crear nuevo"}
             </button>
           </>
         ) : (
@@ -303,7 +323,7 @@ const CloudProjectsHome = () => {
   );
 };
 
-const CloudProjectsList = () => {
+const CloudProjectsList = ({ view }: { view: "drafts" | "settings" }) => {
   const [projects, setProjects] = useState<
     Array<{
       projectId: string;
@@ -323,27 +343,44 @@ const CloudProjectsList = () => {
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(
     null,
   );
+  const [sidebarExpanded, setSidebarExpanded] = useState(false);
+  const [projectView, setProjectView] = useState<"list" | "grid">(() => {
+    try {
+      const savedView = window.localStorage.getItem(
+        CLOUD_PROJECT_VIEW_STORAGE_KEY,
+      );
+
+      return savedView === "grid" ? "grid" : "list";
+    } catch {
+      return "list";
+    }
+  });
+  const [hoveredProjectId, setHoveredProjectId] = useState<string | null>(null);
+  const [hoveredDeleteProjectId, setHoveredDeleteProjectId] = useState<
+    string | null
+  >(null);
+  const [sessionUser, setSessionUser] = useState<{
+    email?: string | null;
+    name?: string | null;
+    image?: string | null;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
 
-    listRemoteProjects()
-      .then((result) => {
+    Promise.all([listRemoteProjects(), getRemoteAuthSession()])
+      .then(([result, session]) => {
         if (cancelled) {
           return;
         }
 
-        if (!result.authenticated) {
-          window.location.assign(getCloudLoginUrl("/projects"));
-          return;
-        }
-
-        if (!result.projects.length) {
-          window.location.assign("/");
+        if (!result.authenticated || !session.authenticated) {
+          window.location.assign(getCloudLoginUrl(CLOUD_DRAFTS_PATH));
           return;
         }
 
         setProjects(result.projects);
+        setSessionUser(session.user);
         setStatus("ready");
       })
       .catch((error) => {
@@ -363,16 +400,13 @@ const CloudProjectsList = () => {
     };
   }, []);
 
-  const buttonStyle = {
-    border: 0,
-    borderRadius: 12,
-    background: "#1f1f1f",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: 15,
-    fontWeight: 700,
-    padding: "12px 18px",
-  } as const;
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CLOUD_PROJECT_VIEW_STORAGE_KEY, projectView);
+    } catch {
+      // Ignore storage failures; the view toggle still works for this session.
+    }
+  }, [projectView]);
 
   const handleDeleteProject = async () => {
     if (!projectToDelete) {
@@ -402,138 +436,715 @@ const CloudProjectsList = () => {
     }
   };
 
+  const today = new Date();
+  const weekday = today.toLocaleDateString(undefined, { weekday: "short" });
+  const dayMonth = today.toLocaleDateString(undefined, {
+    day: "2-digit",
+    month: "long",
+  });
+  const year = today.getFullYear();
+  const sidebarWidth = sidebarExpanded ? 190 : 54;
+  const isSettingsView = view === "settings";
+  const userInitial = (sessionUser?.name || sessionUser?.email || "U")
+    .charAt(0)
+    .toUpperCase();
+  const getSidebarButtonStyle = (isActive = false) =>
+    ({
+      alignItems: "center",
+      background: sidebarExpanded && isActive ? "#050505" : "transparent",
+      border: 0,
+      color: sidebarExpanded && isActive ? "#fff" : "#050505",
+      cursor: "pointer",
+      display: "flex",
+      fontSize: 22,
+      gap: 14,
+      justifyContent: sidebarExpanded ? "flex-start" : "center",
+      lineHeight: 1,
+      marginTop: 10,
+      minHeight: 34,
+      padding: sidebarExpanded ? "8px 16px" : "8px 0",
+      transition: "background 160ms ease, color 160ms ease, opacity 160ms ease",
+    }) as const;
+
   return (
     <div
       style={{
         minHeight: "100vh",
-        background: "#f8f6f2",
-        color: "#1f1f1f",
+        background: "#efefee",
+        color: "#050505",
         fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
-        padding: 24,
+        overflow: "hidden",
+        padding: 0,
       }}
     >
-      <main style={{ maxWidth: 920, margin: "0 auto" }}>
+      <main
+        style={{
+          background: "#efefee",
+          border: 0,
+          height: "100vh",
+          margin: 0,
+          maxWidth: "none",
+          minHeight: 0,
+          overflow: "hidden",
+          position: "relative",
+          width: "100vw",
+        }}
+      >
         <header
           style={{
-            display: "flex",
             alignItems: "center",
+            borderBottom: "1px solid #151515",
+            display: "flex",
             justifyContent: "space-between",
-            gap: 16,
-            marginBottom: 24,
+            minHeight: 26,
+            padding: "0 8px",
           }}
         >
-          <div>
-            <h1 style={{ fontSize: 34, margin: "0 0 8px" }}>Proyectos</h1>
-            <p style={{ margin: 0, color: "#625d56" }}>
-              Tus boards guardados en la nube.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => createAndOpenRemoteProject("self")}
-            style={buttonStyle}
-          >
-            Nuevo proyecto
-          </button>
-        </header>
-
-        {status === "loading" && <p>Cargando proyectos...</p>}
-        {status === "error" && <p style={{ color: "#c92a2a" }}>{error}</p>}
-        {status !== "error" && error && (
-          <p style={{ color: "#c92a2a" }}>{error}</p>
-        )}
-        {status === "ready" && !projects.length && (
-          <section
+          <strong style={{ fontSize: 11 }}>
+            {isSettingsView ? "Settings" : "Drafts"}
+          </strong>
+          <span
             style={{
-              border: "1px solid #ded9cf",
-              borderRadius: 18,
-              background: "#fffdf8",
-              padding: 28,
-              textAlign: "center",
+              fontSize: 12,
+              fontWeight: 700,
             }}
           >
-            <p style={{ marginTop: 0 }}>Aún no tienes proyectos.</p>
+            {weekday} / {dayMonth} / {year}
+          </span>
+        </header>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: `${sidebarWidth}px 1fr 36px`,
+            height: "calc(100% - 27px)",
+          }}
+        >
+          <aside
+            style={{
+              alignItems: sidebarExpanded ? "stretch" : "center",
+              borderRight: "1px solid #151515",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              paddingTop: 18,
+              transition: "width 180ms ease",
+            }}
+          >
             <button
               type="button"
-              onClick={() => createAndOpenRemoteProject("self")}
-              style={buttonStyle}
+              aria-label="Expandir menú lateral"
+              onClick={() => setSidebarExpanded((expanded) => !expanded)}
+              style={{
+                ...getSidebarButtonStyle(false),
+                fontSize: 24,
+                marginTop: 0,
+              }}
             >
-              Crear el primero
+              <FiMenu aria-hidden="true" />
+              {sidebarExpanded && <strong style={{ fontSize: 13 }}>Menu</strong>}
             </button>
-          </section>
-        )}
-        {status === "ready" && !!projects.length && (
-          <div style={{ display: "grid", gap: 12 }}>
-            {projects.map((project) => (
-              <article
-                key={project.projectId}
+            <button
+              type="button"
+              aria-label="Abrir drafts"
+              onClick={() => window.location.assign(CLOUD_DRAFTS_PATH)}
+              style={getSidebarButtonStyle(!isSettingsView)}
+            >
+              <FiFileText aria-hidden="true" />
+              {sidebarExpanded && (
+                <strong style={{ fontSize: 13 }}>Drafts</strong>
+              )}
+            </button>
+            <button
+              type="button"
+              aria-label="Alternar lista y cuadrícula"
+              onClick={() =>
+                setProjectView((view) => (view === "list" ? "grid" : "list"))
+              }
+              style={{
+                ...getSidebarButtonStyle(false),
+                cursor: isSettingsView ? "default" : "pointer",
+                opacity: isSettingsView ? 0.35 : 1,
+              }}
+              disabled={isSettingsView}
+            >
+              {projectView === "list" ? (
+                <FiGrid aria-hidden="true" />
+              ) : (
+                <FiList aria-hidden="true" />
+              )}
+              {sidebarExpanded && (
+                <strong style={{ fontSize: 13 }}>
+                  {projectView === "list" ? "Grid view" : "List view"}
+                </strong>
+              )}
+            </button>
+            <button
+              type="button"
+              aria-label="Abrir configuración"
+              onClick={() => window.location.assign(CLOUD_SETTINGS_PATH)}
+              style={getSidebarButtonStyle(isSettingsView)}
+            >
+              <FiSettings aria-hidden="true" />
+              {sidebarExpanded && (
+                <strong style={{ fontSize: 13 }}>Settings</strong>
+              )}
+            </button>
+            <button
+              type="button"
+              aria-label="Crear nuevo draft"
+              onClick={() => createAndOpenRemoteProject("self")}
+              style={{
+                ...getSidebarButtonStyle(false),
+                background: "transparent",
+                fontSize: 32,
+                marginTop: "auto",
+                padding: sidebarExpanded ? "0 16px 14px" : "0 0 14px",
+              }}
+            >
+              <FiPlus aria-hidden="true" />
+              {sidebarExpanded && <strong style={{ fontSize: 13 }}>New draft</strong>}
+            </button>
+          </aside>
+
+          <section style={{ overflow: "auto" }}>
+            <div
+              style={{
+                alignItems: "center",
+                borderBottom: "1px solid #151515",
+                display: "flex",
+                justifyContent: "space-between",
+                minHeight: 96,
+                padding: "0 18px",
+              }}
+            >
+              <div>
+                <div style={{ display: "flex", gap: 7, marginBottom: 20 }}>
+                  <span
+                    style={{
+                      background: "#f4a62a",
+                      borderRadius: 999,
+                      height: 9,
+                      width: 9,
+                    }}
+                  />
+                  <span
+                    style={{
+                      background: "#2f63d8",
+                      borderRadius: 999,
+                      height: 9,
+                      width: 9,
+                    }}
+                  />
+                  <span
+                    style={{
+                      background: "#d93434",
+                      borderRadius: 999,
+                      height: 9,
+                      width: 9,
+                    }}
+                  />
+                </div>
+                <h1 style={{ fontSize: 24, margin: 0 }}>
+                  {isSettingsView ? "Account Settings" : "Sacred Drafts"}
+                </h1>
+              </div>
+              <button
+                type="button"
+                onClick={() => createAndOpenRemoteProject("self")}
                 style={{
-                  border: "1px solid #ded9cf",
-                  borderRadius: 16,
-                  background: "#fffdf8",
-                  display: "flex",
-                  flexWrap: "wrap",
-                  justifyContent: "space-between",
-                  gap: 16,
-                  padding: 18,
-                  boxShadow: "0 12px 40px rgba(31, 31, 31, 0.05)",
+                  background: "#050505",
+                  border: 0,
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontSize: 15,
+                  fontWeight: 800,
+                  padding: "14px 18px",
+                  textTransform: "uppercase",
                 }}
               >
-                <button
-                  type="button"
-                  onClick={() =>
-                    window.location.assign(`/projects/${project.projectId}`)
-                  }
+                New draft
+              </button>
+            </div>
+
+            {status === "loading" && (
+              <div
+                style={{
+                  alignItems: "center",
+                  display: "flex",
+                  minHeight: "calc(100vh - 345px)",
+                  padding: "0 18px",
+                }}
+              >
+                <p style={{ fontSize: 18, fontWeight: 800 }}>Cargando drafts...</p>
+              </div>
+            )}
+            {status === "error" && (
+              <p style={{ color: "#c92a2a", padding: "18px 14px" }}>{error}</p>
+            )}
+            {status !== "error" && error && (
+              <p style={{ color: "#c92a2a", padding: "18px 14px" }}>{error}</p>
+            )}
+
+            {status === "ready" && isSettingsView && (
+              <article
+                style={{
+                  display: "grid",
+                  gap: 0,
+                  gridTemplateColumns: "minmax(260px, 420px) 1fr",
+                  minHeight: "calc(100vh - 124px)",
+                }}
+              >
+                <div
                   style={{
-                    background: "transparent",
-                    border: 0,
-                    color: "inherit",
-                    cursor: "pointer",
-                    flex: 1,
-                    minWidth: 240,
-                    padding: 0,
-                    textAlign: "left",
+                    alignItems: "center",
+                    borderRight: "1px solid #151515",
+                    display: "flex",
+                    justifyContent: "center",
+                    padding: 32,
                   }}
                 >
-                  <strong style={{ display: "block", marginBottom: 6 }}>
-                    {project.title ||
-                      `Proyecto ${project.projectId.slice(0, 8)}`}
-                  </strong>
-                  <span style={{ color: "#625d56", display: "block" }}>
-                    UUID: {project.projectId}
-                  </span>
-                  <span style={{ color: "#625d56", display: "block" }}>
-                    Actualizado: {new Date(project.updatedAt).toLocaleString()}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  disabled={deletingProjectId === project.projectId}
-                  onClick={() => setProjectToDelete(project)}
-                  style={{
-                    alignSelf: "center",
-                    background: "#fff1f1",
-                    border: "1px solid #ffc9c9",
-                    borderRadius: 12,
-                    color: "#c92a2a",
-                    cursor:
-                      deletingProjectId === project.projectId
-                        ? "default"
-                        : "pointer",
-                    fontSize: 14,
-                    fontWeight: 700,
-                    opacity: deletingProjectId === project.projectId ? 0.65 : 1,
-                    padding: "10px 14px",
-                  }}
-                >
-                  {deletingProjectId === project.projectId
-                    ? "Eliminando..."
-                    : "Eliminar"}
-                </button>
+                  {sessionUser?.image ? (
+                    <img
+                      alt={sessionUser.name || sessionUser.email || "User"}
+                      src={sessionUser.image}
+                      style={{
+                        border: "1px solid #151515",
+                        height: "min(280px, 34vw)",
+                        objectFit: "cover",
+                        width: "min(280px, 34vw)",
+                      }}
+                    />
+                  ) : (
+                    <div
+                      aria-label="Avatar"
+                      style={{
+                        alignItems: "center",
+                        background: "#050505",
+                        color: "#fff",
+                        display: "flex",
+                        fontSize: "min(120px, 16vw)",
+                        fontWeight: 800,
+                        height: "min(280px, 34vw)",
+                        justifyContent: "center",
+                        width: "min(280px, 34vw)",
+                      }}
+                    >
+                      {userInitial}
+                    </div>
+                  )}
+                </div>
+                <div style={{ padding: "42px 48px" }}>
+                  <span
+                    style={{
+                      background: "#2f63d8",
+                      borderRadius: 999,
+                      display: "block",
+                      height: 9,
+                      marginBottom: 30,
+                      width: 9,
+                    }}
+                  />
+                  <h2
+                    style={{
+                      fontSize: "clamp(52px, 8vw, 120px)",
+                      letterSpacing: -6,
+                      lineHeight: 0.9,
+                      margin: "0 0 38px",
+                    }}
+                  >
+                    {sessionUser?.name || "Usuario"}
+                  </h2>
+                  <dl
+                    style={{
+                      display: "grid",
+                      gap: 0,
+                      margin: 0,
+                      maxWidth: 720,
+                    }}
+                  >
+                    {[
+                      ["Email", sessionUser?.email || "No disponible"],
+                      ["Drafts", String(projects.length)],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        style={{
+                          borderTop: "1px solid #151515",
+                          display: "grid",
+                          gridTemplateColumns: "160px 1fr",
+                          padding: "18px 0",
+                        }}
+                      >
+                        <dt style={{ fontSize: 13, fontWeight: 800 }}>
+                          {label}
+                        </dt>
+                        <dd style={{ fontSize: 20, margin: 0 }}>{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
               </article>
-            ))}
-          </div>
-        )}
+            )}
+
+            {status === "ready" && !isSettingsView && !projects.length && (
+              <article
+                style={{
+                  alignItems: "center",
+                  display: "flex",
+                  minHeight: "calc(100vh - 345px)",
+                  padding: "0 18px",
+                }}
+              >
+                <div>
+                  <span
+                    style={{
+                      background: "#d93434",
+                      borderRadius: 999,
+                      display: "block",
+                      height: 9,
+                      marginBottom: 28,
+                      width: 9,
+                    }}
+                  />
+                  <h2 style={{ fontSize: 42, margin: "0 0 10px" }}>
+                    No drafts yet
+                  </h2>
+                  <p style={{ color: "#555", fontSize: 18, margin: "0 0 28px" }}>
+                    Crea tu primer board guardado en la nube.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => createAndOpenRemoteProject("self")}
+                    style={{
+                      background: "#050505",
+                      border: 0,
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontSize: 16,
+                      fontWeight: 800,
+                      padding: "15px 22px",
+                    }}
+                  >
+                    Crear el primero
+                  </button>
+                </div>
+              </article>
+            )}
+
+            {status === "ready" && !isSettingsView && !!projects.length &&
+              projectView === "grid" && (
+                <div
+                  style={{
+                    display: "grid",
+                    gap: 0,
+                    gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                  }}
+                >
+                  {projects.map((project, index) => {
+                    const updatedAt = new Date(project.updatedAt);
+                    const isHovered = hoveredProjectId === project.projectId;
+
+                    return (
+                      <article
+                        key={project.projectId}
+                        onMouseEnter={() => {
+                          if (hoveredDeleteProjectId !== project.projectId) {
+                            setHoveredProjectId(project.projectId);
+                          }
+                        }}
+                        onMouseLeave={() => setHoveredProjectId(null)}
+                        style={{
+                          background: isHovered ? "#050505" : "#efefee",
+                          borderBottom: "1px solid #151515",
+                          borderRight: "1px solid #151515",
+                          color: isHovered ? "#fff" : "#050505",
+                          minHeight: 260,
+                          padding: 18,
+                          transition: "background 180ms ease, color 180ms ease",
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() =>
+                            window.location.assign(
+                              `${CLOUD_DRAFTS_PATH}/${project.projectId}`,
+                            )
+                          }
+                          style={{
+                            background: "transparent",
+                            border: 0,
+                            color: "inherit",
+                            cursor: "pointer",
+                            display: "flex",
+                            flexDirection: "column",
+                            minHeight: 190,
+                            padding: 0,
+                            textAlign: "left",
+                            width: "100%",
+                          }}
+                        >
+                          <div style={{ display: "flex", gap: 7 }}>
+                            <span
+                              style={{
+                                background:
+                                  index % 2 === 0 ? "#f4a62a" : "#d93434",
+                                borderRadius: 999,
+                                height: 9,
+                                width: 9,
+                              }}
+                            />
+                            <span
+                              style={{
+                                background: "#2f63d8",
+                                borderRadius: 999,
+                                height: 9,
+                                width: 9,
+                              }}
+                            />
+                          </div>
+                          <strong
+                            style={{
+                              display: "block",
+                              fontSize: 26,
+                              marginTop: 34,
+                            }}
+                          >
+                            {project.title ||
+                              `Draft ${project.projectId.slice(0, 8)}`}
+                          </strong>
+                          <span style={{ color: isHovered ? "#cfcfcf" : "#555", fontSize: 14, marginTop: "auto" }}>
+                            Updated {updatedAt.toLocaleString()}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={deletingProjectId === project.projectId}
+                          onClick={() => setProjectToDelete(project)}
+                          onMouseEnter={() => {
+                            setHoveredProjectId(null);
+                            setHoveredDeleteProjectId(project.projectId);
+                          }}
+                          onMouseLeave={() => setHoveredDeleteProjectId(null)}
+                          style={{
+                            background:
+                              hoveredDeleteProjectId === project.projectId
+                                ? "#f03e3e"
+                                : "#c92a2a",
+                            border: 0,
+                            color: "#fff",
+                            cursor:
+                              deletingProjectId === project.projectId
+                                ? "default"
+                                : "pointer",
+                            fontSize: 12,
+                            fontWeight: 800,
+                            marginTop: 16,
+                            padding: "9px 12px",
+                            transition: "background 160ms ease",
+                          }}
+                        >
+                          {deletingProjectId === project.projectId
+                            ? "Deleting"
+                            : "Delete"}
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+
+            {status === "ready" && !isSettingsView && !!projects.length &&
+              projectView === "list" &&
+              projects.map((project, index) => {
+                const updatedAt = new Date(project.updatedAt);
+                const isHovered = hoveredProjectId === project.projectId;
+
+                return (
+                  <article
+                    key={project.projectId}
+                    onMouseEnter={() => {
+                      if (hoveredDeleteProjectId !== project.projectId) {
+                        setHoveredProjectId(project.projectId);
+                      }
+                    }}
+                    onMouseLeave={() => setHoveredProjectId(null)}
+                    style={{
+                      background: isHovered ? "#050505" : "#efefee",
+                      borderBottom: "1px solid #151515",
+                      color: isHovered ? "#fff" : "#050505",
+                      display: "grid",
+                      gridTemplateColumns: "1fr 64px",
+                      minHeight: 112,
+                      transition: "background 180ms ease, color 180ms ease",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() =>
+                        window.location.assign(
+                          `${CLOUD_DRAFTS_PATH}/${project.projectId}`,
+                        )
+                      }
+                      style={{
+                        background: "transparent",
+                        border: 0,
+                        color: "inherit",
+                        cursor: "pointer",
+                        padding: "16px 18px",
+                        textAlign: "left",
+                      }}
+                    >
+                      <div style={{ display: "flex", gap: 7, marginBottom: 28 }}>
+                        <span
+                          style={{
+                            background: index % 2 === 0 ? "#f4a62a" : "#d93434",
+                            borderRadius: 999,
+                            height: 9,
+                            width: 9,
+                          }}
+                        />
+                        <span
+                          style={{
+                            background: "#2f63d8",
+                            borderRadius: 999,
+                            height: 9,
+                            width: 9,
+                          }}
+                        />
+                      </div>
+                      <strong style={{ display: "block", fontSize: 24 }}>
+                        {project.title || `Draft ${project.projectId.slice(0, 8)}`}
+                      </strong>
+                      <span
+                        style={{
+                          color: isHovered ? "#cfcfcf" : "#555",
+                          display: "block",
+                          fontSize: 14,
+                          marginTop: 4,
+                        }}
+                      >
+                        Updated {updatedAt.toLocaleString()}
+                      </span>
+                    </button>
+                    <div
+                      style={{
+                        alignItems: "center",
+                        borderLeft: "1px solid #151515",
+                        display: "flex",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        disabled={deletingProjectId === project.projectId}
+                        onClick={() => setProjectToDelete(project)}
+                        onMouseEnter={() => {
+                          setHoveredProjectId(null);
+                          setHoveredDeleteProjectId(project.projectId);
+                        }}
+                        onMouseLeave={() => setHoveredDeleteProjectId(null)}
+                        style={{
+                          alignSelf: "stretch",
+                          background:
+                            hoveredDeleteProjectId === project.projectId
+                              ? "#f03e3e"
+                              : "#c92a2a",
+                          border: 0,
+                          color: "#fff",
+                          cursor:
+                            deletingProjectId === project.projectId
+                              ? "default"
+                              : "pointer",
+                          fontSize: 12,
+                          fontWeight: 800,
+                          opacity:
+                            deletingProjectId === project.projectId ? 0.55 : 1,
+                          padding: 0,
+                          width: "100%",
+                          writingMode: "vertical-rl",
+                          transition: "background 160ms ease",
+                        }}
+                      >
+                        {deletingProjectId === project.projectId
+                          ? "Deleting"
+                          : "Delete"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+          </section>
+
+          <aside
+            style={{
+              alignItems: "center",
+              borderLeft: "1px solid #151515",
+              display: "flex",
+              flexDirection: "column",
+              fontSize: 12,
+              fontWeight: 800,
+            }}
+          >
+            <span
+              style={{
+                color: "#d93434",
+                fontSize: 18,
+                lineHeight: 1,
+                marginTop: 9,
+              }}
+            >
+              •
+            </span>
+            <span style={{ marginTop: 34, writingMode: "vertical-rl" }}>
+              Drafts
+            </span>
+            <span
+              style={{
+                color: "#2f63d8",
+                fontSize: 18,
+                lineHeight: 1,
+                marginTop: 78,
+              }}
+            >
+              •
+            </span>
+            <span style={{ marginTop: 34, writingMode: "vertical-rl" }}>
+              Private
+            </span>
+            <span
+              style={{
+                color: "#f4a62a",
+                fontSize: 18,
+                lineHeight: 1,
+                marginTop: "auto",
+              }}
+            >
+              •
+            </span>
+            <span
+              style={{
+                marginBottom: 18,
+                marginTop: 34,
+                writingMode: "vertical-rl",
+              }}
+            >
+              Work
+            </span>
+          </aside>
+        </div>
+
+        <div
+          style={{
+            background:
+              "linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.05))",
+            bottom: 0,
+            height: 90,
+            left: 54,
+            pointerEvents: "none",
+            position: "absolute",
+            right: 36,
+          }}
+        />
         {projectToDelete && (
           <div
             role="dialog"
@@ -1708,7 +2319,7 @@ const ExcalidrawWrapper = () => {
           refresh={() => forceRefresh((prev) => !prev)}
           cloudStorageEnabled={isRemoteStorageEnabled}
           onCreateCloudProject={() => createAndOpenRemoteProject("blank")}
-          onOpenCloudProjects={() => window.location.assign("/projects")}
+          onOpenCloudProjects={() => window.location.assign(CLOUD_DRAFTS_PATH)}
         />
         <div className="excalidraw-custom-app-title">
           {projectTitle || "Excalidraw Custom Infrastructure"}
@@ -2076,16 +2687,25 @@ const ExcalidrawApp = () => {
   if (
     isRemoteStorageEnabled &&
     window.location.pathname === "/" &&
-    (!window.location.search ||
-      new URLSearchParams(window.location.search).get("createProject") === "1") &&
+    !window.location.search &&
     !window.location.hash &&
     !getCloudProjectId()
   ) {
     return <CloudProjectsHome />;
   }
 
-  if (isRemoteStorageEnabled && window.location.pathname === "/projects") {
-    return <CloudProjectsList />;
+  if (
+    isRemoteStorageEnabled &&
+    window.location.pathname === CLOUD_DRAFTS_PATH
+  ) {
+    return <CloudProjectsList view="drafts" />;
+  }
+
+  if (
+    isRemoteStorageEnabled &&
+    window.location.pathname === CLOUD_SETTINGS_PATH
+  ) {
+    return <CloudProjectsList view="settings" />;
   }
 
   if (isRemoteStorageEnabled && getCloudProjectId()) {
